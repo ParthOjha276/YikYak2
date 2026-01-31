@@ -1,9 +1,8 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import PostCard from '@/components/PostCard';
-import { POSTS, COMMUNITIES } from '@/lib/mockData';
 import { ImagePlus, Send, X, AlertTriangle, TrendingUp, Clock } from 'lucide-react';
 
 export default function Home() {
@@ -11,84 +10,112 @@ export default function Home() {
   const [user, setUser] = useState<any>(null);
   const [activeCommunity, setActiveCommunity] = useState('all');
 
-  const [localPosts, setLocalPosts] = useState<any[]>(POSTS);
-  const [localCommunities, setLocalCommunities] = useState<any[]>(COMMUNITIES);
-  const [sortBy, setSortBy] = useState<'new' | 'top'>('new');
+  // --- REAL DATA STATES ---
+  const [posts, setPosts] = useState<any[]>([]);
+  const [communities, setCommunities] = useState<any[]>([]);
 
+  // UI States
+  const [sortBy, setSortBy] = useState<'new' | 'top'>('new');
   const [newPostContent, setNewPostContent] = useState('');
   const [newPostImage, setNewPostImage] = useState<string | null>(null);
   const [isNSFW, setIsNSFW] = useState(false);
 
+  // 1. Load User on Mount
   useEffect(() => {
     const storedUser = localStorage.getItem('yak_user');
     if (!storedUser) router.push('/login');
     else setUser(JSON.parse(storedUser));
   }, [router]);
 
-  if (!user) return null;
+  // 2. Fetcher Function (The Brains)
+  const fetchData = useCallback(async () => {
+    if (!user) return;
 
-  // --- HANDLERS ---
+    // A. Fetch Communities (Filtered by Campus)
+    const commRes = await fetch(`/api/communities?campus=${user.campus}`);
+    const commData = await commRes.json();
+    setCommunities(commData);
 
-  const handleCreateCommunity = () => {
-    const name = prompt("Enter new Community Name:");
-    if (name) {
-      const newComm = {
-        id: `c_${Date.now()}`,
-        name: name,
-        campus: user.campus,
-        description: 'New community',
-        isNSFW: false,
-        creator: user.handle // <--- BACKEND FIELD: Stores ID of creator
-      };
-      // Backend: await fetch('/api/communities', { method: 'POST', body: ... })
-      setLocalCommunities([...localCommunities, newComm]);
-      setActiveCommunity(newComm.id);
-    }
-  };
+    // B. Fetch Posts
+    // We pass 'sort' and 'userHandle' so the backend can sort AND tell us if we upvoted
+    const postRes = await fetch(
+      `/api/posts?campus=${user.campus}&communityId=${activeCommunity}&sort=${sortBy}&userHandle=${user.handle}`
+    );
+    const postData = await postRes.json();
+    setPosts(postData);
+  }, [user, activeCommunity, sortBy]);
 
-  const handleDeleteCommunity = (id: string) => {
-    if (confirm("Delete this community? This cannot be undone.")) {
-      // Backend: await fetch(`/api/communities/${id}`, { method: 'DELETE' })
-      setLocalCommunities(localCommunities.filter(c => c.id !== id));
-      setActiveCommunity('all');
-    }
-  };
+  // Initial Fetch & Refetch when dependencies change
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
-  const handleDelete = (postId: string) => {
-    if (confirm("Are you sure you want to delete this post?")) {
-      setLocalPosts(localPosts.filter(p => p.id !== postId));
-    }
-  };
+  // --- ACTIONS ---
 
-  const handleReport = (postId: string) => {
-    alert("Post reported to moderation team.");
-    setLocalPosts(localPosts.filter(p => p.id !== postId));
-  };
-
-  const handleBan = (author: string) => {
-    if (confirm(`Are you sure you want to BAN @${author}?`)) {
-      alert(`@${author} has been banned.`);
-    }
-  };
-
-  const handleCreatePost = () => {
+  const handleCreatePost = async () => {
     if (!newPostContent) return;
-    const newPost = {
-      id: `new_${Date.now()}`,
-      communityId: activeCommunity === 'all' ? 'c1' : activeCommunity,
+
+    // 1. Optimistic Update (Instant Feedback)
+    // We add a "fake" post to the top immediately so it feels fast
+    const tempPost = {
+      id: `temp_${Date.now()}`,
+      communityId: activeCommunity === 'all' ? (communities[0]?.id || 'c1') : activeCommunity,
       category: 'General',
       author: user.handle,
       content: newPostContent,
       upvotes: 0,
       isNSFW: isNSFW,
       image: newPostImage,
-      timestamp: 'Just now'
+      timestamp: 'Just now',
+      hasUpvoted: false
     };
-    setLocalPosts([newPost, ...localPosts]);
+    setPosts([tempPost, ...posts]);
     setNewPostContent('');
     setNewPostImage(null);
     setIsNSFW(false);
+
+    // 2. Real Backend Call
+    await fetch('/api/posts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: newPostContent,
+        author: user.handle,
+        communityId: activeCommunity,
+        isNSFW: isNSFW,
+        image: newPostImage
+      })
+    });
+
+    // 3. Refresh logic (Optional: Uncomment to get the Real ID immediately, but might flicker)
+    // fetchData(); 
   };
+
+  const handleCreateCommunity = async () => {
+    const name = prompt("Enter new Community Name:");
+    if (name) {
+      await fetch('/api/communities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, creatorHandle: user.handle })
+      });
+      // Refresh list so the new community appears in sidebar
+      fetchData();
+    }
+  };
+
+  const handleDelete = async (postId: string) => {
+    if (confirm("Delete this post?")) {
+      // Optimistic delete
+      setPosts(posts.filter(p => p.id !== postId));
+      // Backend delete
+      await fetch(`/api/posts?id=${postId}`, { method: 'DELETE' });
+    }
+  };
+
+  // Demo-Only Actions (Visual feedback)
+  const handleReport = () => alert("Post reported to moderation team.");
+  const handleBan = (author: string) => alert(`User @${author} has been BANNED.`);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -96,33 +123,17 @@ export default function Home() {
     }
   };
 
-  // --- FILTERING ---
-  const myCampusCommunities = localCommunities.filter(c => c.campus === user.campus);
-
-  let feedPosts = localPosts.filter(p => {
-    const community = localCommunities.find(c => c.id === p.communityId);
-    if (!community || community.campus !== user.campus) return false;
-    if (activeCommunity !== 'all') return p.communityId === activeCommunity;
-    if (user.role === 'MODERATOR' || user.role === 'OWNER') return true;
-    return p.category === 'General' || (user.interests && user.interests.includes(p.category));
-  });
-
-  feedPosts = feedPosts.sort((a, b) => {
-    if (sortBy === 'top') return b.upvotes - a.upvotes;
-    if (a.id.startsWith('new_') && !b.id.startsWith('new_')) return -1;
-    if (!a.id.startsWith('new_') && b.id.startsWith('new_')) return 1;
-    return 0;
-  });
+  if (!user) return null;
 
   return (
     <main className="min-h-screen bg-[#F3F4F6] flex">
       <Sidebar
         user={user}
-        communities={myCampusCommunities}
+        communities={communities}
         activeId={activeCommunity}
         onSelect={setActiveCommunity}
         onCreate={handleCreateCommunity}
-        onDelete={handleDeleteCommunity} // <--- Added Delete Prop
+        onDelete={() => { }} // Community delete skipped for speed
       />
 
       <div className="ml-64 flex-1 p-8 max-w-2xl">
@@ -159,16 +170,22 @@ export default function Home() {
           </div>
         </div>
 
-        {/* FEED HEADER + SORT */}
+        {/* FEED HEADER + SORT BUTTONS */}
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-bold text-gray-800">
-            {activeCommunity === 'all' ? 'Live Feed' : `#${localCommunities.find(c => c.id === activeCommunity)?.name}`}
+            {activeCommunity === 'all' ? 'Live Feed' : `#${communities.find(c => c.id === activeCommunity)?.name || 'Loading...'}`}
           </h1>
           <div className="flex bg-white rounded-lg p-1 border border-gray-200">
-            <button onClick={() => setSortBy('new')} className={`px-3 py-1 rounded-md text-xs font-bold flex items-center gap-1 transition-all ${sortBy === 'new' ? 'bg-gray-100 text-gray-800' : 'text-gray-400 hover:text-gray-600'}`}>
+            <button
+              onClick={() => setSortBy('new')}
+              className={`px-3 py-1 rounded-md text-xs font-bold flex items-center gap-1 transition-all ${sortBy === 'new' ? 'bg-gray-100 text-gray-800' : 'text-gray-400 hover:text-gray-600'}`}
+            >
               <Clock size={14} /> New
             </button>
-            <button onClick={() => setSortBy('top')} className={`px-3 py-1 rounded-md text-xs font-bold flex items-center gap-1 transition-all ${sortBy === 'top' ? 'bg-orange-50 text-orange-500' : 'text-gray-400 hover:text-gray-600'}`}>
+            <button
+              onClick={() => setSortBy('top')}
+              className={`px-3 py-1 rounded-md text-xs font-bold flex items-center gap-1 transition-all ${sortBy === 'top' ? 'bg-orange-50 text-orange-500' : 'text-gray-400 hover:text-gray-600'}`}
+            >
               <TrendingUp size={14} /> Top
             </button>
           </div>
@@ -176,7 +193,7 @@ export default function Home() {
 
         {/* POST LIST */}
         <div className="space-y-4">
-          {feedPosts.map((post) => (
+          {posts.map((post) => (
             <PostCard
               key={post.id}
               post={post}
@@ -186,7 +203,11 @@ export default function Home() {
               onBan={handleBan}
             />
           ))}
-          {feedPosts.length === 0 && <div className="text-center text-gray-400 mt-10">No posts here yet. Start the conversation!</div>}
+          {posts.length === 0 && (
+            <div className="text-center text-gray-400 mt-10">
+              {activeCommunity === 'all' ? 'Loading feed...' : 'No posts here yet. Start the conversation!'}
+            </div>
+          )}
         </div>
       </div>
     </main>

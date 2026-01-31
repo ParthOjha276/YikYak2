@@ -1,0 +1,75 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  handle    String
+  campus    String
+  role      String
+  interests String
+  
+  posts     Post[]
+  comments  Comment[]
+  votes     Vote[]      // <--- NEW: Track user's votes
+  createdCommunities Community[]
+}
+
+model Community {
+  id          String   @id @default(uuid())
+  name        String
+  campus      String
+  description String?
+  creatorId   String
+  creator     User     @relation(fields: [creatorId], references: [id])
+  posts       Post[]
+}
+
+model Post {
+  id          String    @id @default(uuid())
+  content     String
+  image       String?
+  isNSFW      Boolean   @default(false)
+  upvotes     Int       @default(0)
+  category    String
+  createdAt   DateTime  @default(now())
+  
+  authorId    String
+  author      User      @relation(fields: [authorId], references: [id])
+  communityId String
+  community   Community @relation(fields: [communityId], references: [id])
+  comments    Comment[]
+  votes       Vote[]    // <--- NEW: Track post's votes
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  text      String
+  createdAt DateTime @default(now())
+  
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id])
+}
+
+// NEW MODEL
+model Vote {
+  id     String @id @default(uuid())
+  userId String
+  postId String
+  value  Int    // <--- NEW: 1 for Upvote, -1 for Downvote
+  user   User   @relation(fields: [userId], references: [id])
+  post   Post   @relation(fields: [postId], references: [id])
+
+  @@unique([userId, postId])
+}

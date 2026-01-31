@@ -4,27 +4,55 @@ import { ArrowBigUp, ArrowBigDown, Trash2, ShieldAlert, MessageSquare, Send, Fla
 
 export default function PostCard({ post, user, onDelete, onReport, onBan }: { post: any, user: any, onDelete: (id: string) => void, onReport: (id: string) => void, onBan: (author: string) => void }) {
     const [isBlur, setIsBlur] = useState(post.isNSFW);
+
+    // VOTE STATE
     const [voteCount, setVoteCount] = useState(post.upvotes);
+    const [userVote, setUserVote] = useState(post.userVote || 0); // 1, -1, or 0
 
     const [showComments, setShowComments] = useState(false);
     const [commentText, setCommentText] = useState('');
-
-    // FIX: Start empty so new posts don't have fake replies
     const [comments, setComments] = useState<any[]>([]);
 
-    // Load comments (Backend would be: fetch(`/api/comments/${post.id}`))
     useEffect(() => {
         const saved = localStorage.getItem(`yak_comments_${post.id}`);
-        if (saved) {
-            setComments(JSON.parse(saved));
-        } else if (post.id === 'p1' || post.id === 'p2') {
-            // OPTIONAL: Keep mock comments ONLY for the original 2 mock posts so the demo doesn't look empty
-            setComments([
-                { id: 1, author: 'Anon-Mouse', text: 'Bro this is so real 💀' },
-                { id: 2, author: 'Campus-Cat', text: 'Skill issue tbh.' }
-            ]);
-        }
+        if (saved) setComments(JSON.parse(saved));
     }, [post.id]);
+
+    // Handle Voting
+    const handleVote = async (type: number) => {
+        // 1. Optimistic UI Update (Instant change)
+        const previousVote = userVote;
+        const previousCount = voteCount;
+
+        let newVote = type;
+        let diff = 0;
+
+        if (previousVote === type) {
+            newVote = 0; // Remove vote
+            diff = -type;
+        } else if (previousVote === 0) {
+            newVote = type; // New vote
+            diff = type;
+        } else {
+            newVote = type; // Switch vote
+            diff = 2 * type;
+        }
+
+        setUserVote(newVote);
+        setVoteCount(previousCount + diff);
+
+        // 2. Backend Call
+        try {
+            await fetch('/api/vote', {
+                method: 'POST',
+                body: JSON.stringify({ postId: post.id, userHandle: user.handle, voteType: type })
+            });
+        } catch (e) {
+            // Revert on error
+            setUserVote(previousVote);
+            setVoteCount(previousCount);
+        }
+    };
 
     // Permission Logic
     const safeUser = user || {};
@@ -40,7 +68,6 @@ export default function PostCard({ post, user, onDelete, onReport, onBan }: { po
         const updated = [...comments, newComment];
         setComments(updated);
         setCommentText('');
-        // Backend: await fetch('/api/comments', { method: 'POST', body: ... })
         localStorage.setItem(`yak_comments_${post.id}`, JSON.stringify(updated));
     };
 
@@ -49,9 +76,25 @@ export default function PostCard({ post, user, onDelete, onReport, onBan }: { po
             <div className="flex">
                 {/* Vote Strip */}
                 <div className="w-10 bg-gray-50 flex flex-col items-center p-2 gap-1 border-r border-gray-100">
-                    <button onClick={() => setVoteCount(voteCount + 1)} className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-yak-teal transition-colors"><ArrowBigUp size={24} /></button>
-                    <span className="text-sm font-bold text-gray-700">{voteCount}</span>
-                    <button onClick={() => setVoteCount(voteCount - 1)} className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-blue-500 transition-colors"><ArrowBigDown size={24} /></button>
+                    {/* UPVOTE */}
+                    <button
+                        onClick={() => handleVote(1)}
+                        className={`p-1 rounded transition-colors ${userVote === 1 ? 'text-yak-teal bg-yak-teal/10' : 'text-gray-400 hover:bg-gray-200 hover:text-yak-teal'}`}
+                    >
+                        <ArrowBigUp size={24} fill={userVote === 1 ? "currentColor" : "none"} />
+                    </button>
+
+                    <span className={`text-sm font-bold ${userVote !== 0 ? (userVote === 1 ? 'text-yak-teal' : 'text-blue-500') : 'text-gray-700'}`}>
+                        {voteCount}
+                    </span>
+
+                    {/* DOWNVOTE */}
+                    <button
+                        onClick={() => handleVote(-1)}
+                        className={`p-1 rounded transition-colors ${userVote === -1 ? 'text-blue-500 bg-blue-50' : 'text-gray-400 hover:bg-gray-200 hover:text-blue-500'}`}
+                    >
+                        <ArrowBigDown size={24} fill={userVote === -1 ? "currentColor" : "none"} />
+                    </button>
                 </div>
 
                 <div className="flex-1 p-3">
